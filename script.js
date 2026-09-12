@@ -17,6 +17,7 @@
   var pendingTimeoutHandle = null;
   var confirmTargetPeer = null;
   var selectedRider = null;
+  var isVisible = false; // "동승 가능한 사람 찾기"를 눌러야 다른 탭에 후보로 보임
 
   var me = loadOrCreateIdentity();
 
@@ -47,7 +48,7 @@
     channel.onmessage = function(ev){
       var msg = ev.data || {};
       if (msg.type === 'hello') {
-        if (msg.id !== me.id) broadcastPresence();
+        if (msg.id !== me.id && isVisible) broadcastPresence();
         return;
       }
       if (msg.type === 'presence') {
@@ -101,11 +102,20 @@
     clearPendingTimeout();
     pendingRequest = null;
   }
+  function becomeVisible(){
+    if (isVisible) return;
+    isVisible = true;
+    broadcastPresence();
+    send({ type:'hello', id: me.id }); // 이미 검색 중인 다른 탭들의 정보를 즉시 받아오기
+  }
+  function becomeHidden(){
+    if (!isVisible) return;
+    isVisible = false;
+    send({ type:'bye', id: me.id });
+  }
 
-  broadcastPresence();
-  send({ type:'hello', id: me.id });
-  setInterval(broadcastPresence, PRESENCE_INTERVAL_MS);
-  window.addEventListener('pagehide', function(){ send({ type:'bye', id: me.id }); });
+  setInterval(function(){ if (isVisible) broadcastPresence(); }, PRESENCE_INTERVAL_MS);
+  window.addEventListener('pagehide', function(){ if (isVisible) send({ type:'bye', id: me.id }); });
 
   setInterval(function(){
     var now = Date.now();
@@ -204,11 +214,14 @@
   function renderList(){
     cardList.innerHTML = '';
     incoming.forEach(function(r){ cardList.appendChild(buildIncomingCard(r)); });
-    var peerIds = Object.keys(peers);
-    if (peerIds.length === 0 && incoming.length === 0) {
+    // 나에게 이미 요청을 보낸 상대는 위쪽 "동승 요청 도착" 카드로만 보여주고,
+    // 아래 일반 후보 목록에는 중복으로 띄우지 않는다.
+    var incomingFromIds = incoming.map(function(r){ return r.fromId; });
+    var candidateIds = Object.keys(peers).filter(function(id){ return incomingFromIds.indexOf(id) === -1; });
+    if (candidateIds.length === 0 && incoming.length === 0) {
       cardList.appendChild(buildEmptyState());
     } else {
-      peerIds.forEach(function(id){ cardList.appendChild(buildRiderCard(peers[id])); });
+      candidateIds.forEach(function(id){ cardList.appendChild(buildRiderCard(peers[id])); });
     }
   }
 
@@ -253,6 +266,11 @@
     Array.prototype.forEach.call(rail.children, function(b){
       b.classList.toggle('is-current', b.dataset.screen === name);
     });
+    if (name === 'list' || name === 'waiting') {
+      becomeVisible();
+    } else {
+      becomeHidden();
+    }
     if (name === 'list') renderList();
     if (name === 'waiting') {
       document.getElementById('waiting-title').textContent =
