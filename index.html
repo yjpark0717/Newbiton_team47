@@ -27,8 +27,24 @@
         <div class="phone-notch"></div>
         <div class="phone-screen">
 
+          <!-- Screen 0: 이름 설정 (최초 1회) -->
+          <section class="screen" id="screen-name" aria-label="이름 설정">
+            <h2 class="screen-title">이름을 알려주세요</h2>
+            <p class="screen-sub">동승 상대에게 이 이름으로 표시돼요. 나중에 언제든 바꿀 수 있어요.</p>
+            <div class="form-stack">
+              <div class="field">
+                <label for="input-name">이름</label>
+                <div class="input-row">
+                  <input id="input-name" type="text" placeholder="예: 영준" autocomplete="off" maxlength="12" />
+                </div>
+              </div>
+            </div>
+            <div class="spacer"></div>
+            <button class="btn btn-primary" id="btn-name-confirm">시작하기</button>
+          </section>
+
           <!-- Screen 1: 위치 설정 -->
-          <section class="screen is-active" id="screen-location" aria-label="위치 설정">
+          <section class="screen" id="screen-location" aria-label="위치 설정">
             <h2 class="screen-title">어디로 이동하시나요?</h2>
             <p class="screen-sub">출발지와 목적지를 입력하면 동선이 겹치는 동승 후보를 찾아드려요.</p>
 

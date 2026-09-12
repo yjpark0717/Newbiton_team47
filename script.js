@@ -18,7 +18,7 @@
   ];
 
   var screens = ['location','list','waiting','matched'];
-  var allScreens = screens.concat(['map-pick']);
+  var allScreens = screens.concat(['map-pick', 'name']);
   var railLabels = { location:'1. 위치 설정', list:'2. 동승자 선택', waiting:'3. 요청 대기', matched:'4. 매칭 완료' };
   var current = 'location';
 
@@ -169,7 +169,8 @@
       ride = { start: RIDE_POOL[0], end: RIDE_POOL[5] };
       sessionStorage.setItem('carpool-demo-my-ride', JSON.stringify(ride));
     }
-    return { id: id, name: '이용자 ' + id, ride: ride };
+    var savedName = sessionStorage.getItem('carpool-demo-my-name');
+    return { id: id, name: savedName || ('이용자 ' + id), ride: ride, hasCustomName: !!savedName };
   }
 
   // ---- Firebase 연결 ----
@@ -603,8 +604,20 @@
   });
   document.getElementById('btn-restart').addEventListener('click', function(){ goTo('location'); });
 
+  function confirmName(){
+    var val = document.getElementById('input-name').value.trim();
+    me.name = val || ('이용자 ' + me.id);
+    sessionStorage.setItem('carpool-demo-my-name', me.name);
+    document.getElementById('device-badge').textContent = '이 기기는 "' + me.name + '"로 표시돼요';
+    goTo('location');
+  }
+  document.getElementById('btn-name-confirm').addEventListener('click', confirmName);
+  document.getElementById('input-name').addEventListener('keydown', function(e){
+    if (e.key === 'Enter') confirmName();
+  });
+
   document.getElementById('device-badge').textContent = '이 기기는 "' + me.name + '"로 표시돼요';
 
   initMapModeIfAvailable();
-  goTo('location');
+  goTo(me.hasCustomName ? 'location' : 'name');
 })();
