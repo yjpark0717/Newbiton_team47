@@ -18,6 +18,7 @@
   ];
 
   var screens = ['location','list','waiting','matched'];
+  var allScreens = screens.concat(['map-pick']);
   var railLabels = { location:'1. 위치 설정', list:'2. 동승자 선택', waiting:'3. 요청 대기', matched:'4. 매칭 완료' };
   var current = 'location';
 
@@ -31,6 +32,15 @@
   var selectedRider = null;
   var isVisible = false; // "동승 가능한 사람 찾기"를 눌러야 다른 사람에게 후보로 보임
   var routeCache = {};   // peerId -> {status:'loading'|'ready'|'error', detourMin, save, theirDetourMin, theirSave}
+
+  // 지도에서 직접 위치를 고르는 모드(가능하면 이걸 우선 사용, 안 되면 텍스트 입력으로 대체)
+  var mapModeEnabled = false;
+  var naverMapClientId = null;
+  var myOrigin = null; // {lat, lng, name}
+  var myDest = null;   // {lat, lng, name}
+  var pickMap = null;
+  var pickedPoint = null;
+  var mapPickMode = null; // 'origin' | 'dest'
 
   var me = loadOrCreateIdentity();
 
@@ -51,6 +61,98 @@
       if (!res.ok) throw new Error('geocode failed');
       return res.json();
     }).catch(function(){ return fallbackGeocode(address); });
+  }
+
+  // ---- 지도에서 직접 위치 고르기 (Web Dynamic Map, 서버가 클라이언트 ID를 내려줄 때만 활성화) ----
+  var naverMapsReady = null;
+  function loadNaverMapsSdk(clientId){
+    if (naverMapsReady) return naverMapsReady;
+    naverMapsReady = new Promise(function(resolve, reject){
+      var script = document.createElement('script');
+      script.src = 'https://oapi.map.naver.com/openapi/v3/maps.js?ncpClientId=' + encodeURIComponent(clientId);
+      script.onload = function(){ resolve(); };
+      script.onerror = function(){ reject(new Error('네이버 지도 스크립트를 불러오지 못했습니다.')); };
+      document.head.appendChild(script);
+    });
+    return naverMapsReady;
+  }
+
+  function reverseGeocode(lat, lng){
+    return fetch('/api/reverse-geocode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat: lat, lng: lng })
+    }).then(function(res){ return res.json(); }).then(function(data){
+      return data.name || ('선택한 위치 (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')');
+    }).catch(function(){
+      return '선택한 위치 (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')';
+    });
+  }
+
+  function enableMapPickerUI(){
+    mapModeEnabled = true;
+    var originInput = document.getElementById('input-origin');
+    var destInput = document.getElementById('input-dest');
+    originInput.readOnly = true;
+    destInput.readOnly = true;
+    originInput.value = '';
+    destInput.value = '';
+    originInput.placeholder = '탭해서 지도에서 출발지를 선택하세요';
+    destInput.placeholder = '탭해서 지도에서 목적지를 선택하세요';
+    originInput.addEventListener('click', function(){ openMapPicker('origin'); });
+    destInput.addEventListener('click', function(){ openMapPicker('dest'); });
+  }
+
+  function initMapModeIfAvailable(){
+    fetch('/api/config').then(function(res){
+      if (!res.ok) throw new Error('config unavailable');
+      return res.json();
+    }).then(function(config){
+      if (!config.naverMapClientId) throw new Error('no client id');
+      naverMapClientId = config.naverMapClientId;
+      return loadNaverMapsSdk(naverMapClientId);
+    }).then(function(){
+      enableMapPickerUI();
+    }).catch(function(){
+      mapModeEnabled = false; // 텍스트 입력 모드 그대로 유지
+    });
+  }
+
+  function ensurePickMap(){
+    if (pickMap) return;
+    pickMap = new naver.maps.Map('map-canvas', {
+      center: new naver.maps.LatLng(37.5665, 126.9780),
+      zoom: 16,
+      zoomControl: false
+    });
+    naver.maps.Event.addListener(pickMap, 'idle', onPickMapIdle);
+  }
+
+  function onPickMapIdle(){
+    var center = pickMap.getCenter();
+    var lat = center.lat(), lng = center.lng();
+    var addrEl = document.getElementById('map-pick-address');
+    pickedPoint = { lat: lat, lng: lng, name: null };
+    addrEl.textContent = '주소 확인 중…';
+    reverseGeocode(lat, lng).then(function(name){
+      if (pickedPoint && pickedPoint.lat === lat && pickedPoint.lng === lng) {
+        pickedPoint.name = name;
+        addrEl.textContent = name;
+      }
+    });
+  }
+
+  function openMapPicker(mode){
+    mapPickMode = mode;
+    document.getElementById('map-pick-title').textContent = (mode === 'origin' ? '출발지 설정' : '목적지 설정');
+    document.getElementById('map-pick-address').textContent = '지도를 움직여 위치를 선택해주세요.';
+    var existing = (mode === 'origin') ? myOrigin : myDest;
+    var startCenter = existing || { lat: 37.5665, lng: 126.9780 };
+    pickedPoint = existing;
+    goTo('map-pick');
+    ensurePickMap();
+    setTimeout(function(){
+      naver.maps.Event.trigger(pickMap, 'resize');
+      pickMap.setCenter(new naver.maps.LatLng(startCenter.lat, startCenter.lng));
+    }, 0);
   }
 
   function loadOrCreateIdentity(){
@@ -388,7 +490,7 @@
   function goTo(name){
     if (current === 'waiting' && name !== 'waiting') cancelPendingRequest();
     current = name;
-    screens.forEach(function(s){
+    allScreens.forEach(function(s){
       document.getElementById('screen-' + s).classList.toggle('is-active', s === name);
     });
     Array.prototype.forEach.call(rail.children, function(b){
@@ -432,10 +534,37 @@
   }
 
   document.getElementById('btn-locate').addEventListener('click', function(){
-    document.getElementById('input-origin').value = '현재 위치 (내 GPS 좌표)';
+    var input = document.getElementById('input-origin');
+    if (!mapModeEnabled || !navigator.geolocation) {
+      input.value = '현재 위치 (내 GPS 좌표)';
+      return;
+    }
+    var original = input.value;
+    input.value = '위치를 가져오는 중…';
+    navigator.geolocation.getCurrentPosition(function(pos){
+      var lat = pos.coords.latitude, lng = pos.coords.longitude;
+      reverseGeocode(lat, lng).then(function(name){
+        myOrigin = { lat: lat, lng: lng, name: name };
+        input.value = name;
+      });
+    }, function(){
+      input.value = original;
+      window.alert('현재 위치를 가져오지 못했어요. 지도에서 직접 선택해주세요.');
+    }, { enableHighAccuracy: true, timeout: 8000 });
   });
   document.getElementById('btn-find').addEventListener('click', function(){
     var findBtn = document.getElementById('btn-find');
+    if (mapModeEnabled) {
+      if (!myOrigin || !myDest) {
+        window.alert('출발지와 목적지를 지도에서 선택해주세요.');
+        return;
+      }
+      me.ride = { start: myOrigin, end: myDest };
+      sessionStorage.setItem('carpool-demo-my-ride', JSON.stringify(me.ride));
+      routeCache = {};
+      goTo('list');
+      return;
+    }
     var originText = document.getElementById('input-origin').value.trim();
     var destText = document.getElementById('input-dest').value.trim();
     findBtn.disabled = true;
@@ -447,6 +576,19 @@
       findBtn.disabled = false;
       goTo('list');
     });
+  });
+  document.getElementById('btn-map-back').addEventListener('click', function(){ goTo('location'); });
+  document.getElementById('btn-map-confirm').addEventListener('click', function(){
+    if (!pickedPoint) return;
+    var value = pickedPoint;
+    if (mapPickMode === 'origin') {
+      myOrigin = value;
+      document.getElementById('input-origin').value = value.name || '선택한 위치';
+    } else {
+      myDest = value;
+      document.getElementById('input-dest').value = value.name || '선택한 위치';
+    }
+    goTo('location');
   });
   document.getElementById('btn-decline').addEventListener('click', closeConfirm);
   document.getElementById('btn-accept').addEventListener('click', function(){
@@ -463,5 +605,6 @@
 
   document.getElementById('device-badge').textContent = '이 기기는 "' + me.name + '"로 표시돼요';
 
+  initMapModeIfAvailable();
   goTo('location');
 })();

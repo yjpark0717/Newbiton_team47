@@ -130,6 +130,56 @@ async function compareWithNaver(input) {
   return { ownerAlone, requesterAlone, candidates, bestCandidate };
 }
 
+function pickFormattedAddress(entry) {
+  const region = entry.region || {};
+  const areaNames = ['area1', 'area2', 'area3', 'area4']
+    .map((key) => region[key] && region[key].name)
+    .filter(Boolean);
+  const land = entry.land || {};
+  const landName = land.name ? ` ${land.name}` : '';
+  const number = land.number1 ? ` ${land.number1}${land.number2 ? '-' + land.number2 : ''}` : '';
+  return `${areaNames.join(' ')}${landName}${number}`.trim();
+}
+
+async function reverseGeocodeNaver(lat, lng) {
+  const url = new URL('https://maps.apigw.ntruss.com/map-reversegeocode/v2/gc');
+  url.searchParams.set('coords', `${lng},${lat}`);
+  url.searchParams.set('output', 'json');
+  url.searchParams.set('orders', 'roadaddr,addr');
+  const result = await fetch(url, { headers: getApiHeaders() });
+  const rawText = await result.text();
+  if (!result.ok) {
+    throw new Error(`Reverse Geocoding API 오류(${result.status}): ${rawText || 'Reverse Geocoding 상품이 활성화되어 있는지 확인하세요.'}`);
+  }
+  const body = rawText ? JSON.parse(rawText) : {};
+  if (!body.results || !body.results.length) {
+    throw new Error((body.status && body.status.message) || '주소를 찾을 수 없습니다.');
+  }
+  const roadResult = body.results.find((entry) => entry.name === 'roadaddr');
+  const addrResult = body.results.find((entry) => entry.name === 'addr');
+  const formatted = pickFormattedAddress(roadResult || addrResult || body.results[0]);
+  return formatted || `위도 ${lat.toFixed(5)}, 경도 ${lng.toFixed(5)}`;
+}
+
+async function handleReverseGeocode(request, response) {
+  let body = '';
+  request.on('data', (chunk) => { body += chunk; });
+  request.on('end', async () => {
+    try {
+      const { lat, lng } = JSON.parse(body);
+      if (typeof lat !== 'number' || typeof lng !== 'number') throw new Error('lat/lng가 필요합니다.');
+      const name = await reverseGeocodeNaver(lat, lng);
+      sendJson(response, 200, { name });
+    } catch (error) {
+      sendJson(response, 500, { error: error.message });
+    }
+  });
+}
+
+function handleConfig(request, response) {
+  sendJson(response, 200, { naverMapClientId: NAVER_CLIENT_ID || null });
+}
+
 async function handleGeocode(request, response) {
   let body = '';
   request.on('data', (chunk) => { body += chunk; });
@@ -163,6 +213,8 @@ const server = http.createServer((request, response) => {
   const requestUrl = new URL(request.url, `http://${request.headers.host}`);
   if (request.method === 'POST' && requestUrl.pathname === '/api/route-compare') return handleCompare(request, response);
   if (request.method === 'POST' && requestUrl.pathname === '/api/geocode') return handleGeocode(request, response);
+  if (request.method === 'POST' && requestUrl.pathname === '/api/reverse-geocode') return handleReverseGeocode(request, response);
+  if (request.method === 'GET' && requestUrl.pathname === '/api/config') return handleConfig(request, response);
   const fileName = STATIC_FILES[requestUrl.pathname];
   if (!fileName) return sendJson(response, 404, { error: 'Not found' });
   const filePath = path.join(__dirname, fileName);

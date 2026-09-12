@@ -60,6 +60,26 @@
             <button class="btn btn-primary" id="btn-find">동승 가능한 사람 찾기</button>
           </section>
 
+          <!-- Screen: 지도에서 위치 선택 (지도 API 사용 가능할 때만 진입) -->
+          <section class="screen map-pick-screen" id="screen-map-pick" aria-label="지도에서 위치 선택">
+            <div class="map-pick-header">
+              <button class="icon-btn" id="btn-map-back" type="button" aria-label="뒤로">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+              <h2 class="screen-title" id="map-pick-title" style="margin:0;">출발지 설정</h2>
+            </div>
+            <div class="map-pick-canvas-wrap">
+              <div id="map-canvas"></div>
+              <div class="map-pin" aria-hidden="true">
+                <svg width="30" height="38" viewBox="0 0 30 38" fill="none"><path d="M15 37C15 37 27 23.5 27 14.5C27 7.32 21.4 1.5 15 1.5C8.6 1.5 3 7.32 3 14.5C3 23.5 15 37 15 37Z" fill="currentColor" stroke="var(--surface)" stroke-width="1.5"/><circle cx="15" cy="14.5" r="5" fill="var(--surface)"/></svg>
+              </div>
+            </div>
+            <div class="map-pick-sheet">
+              <p class="map-pick-address" id="map-pick-address">지도를 움직여 위치를 선택해주세요.</p>
+              <button class="btn btn-primary" id="btn-map-confirm" type="button">확인</button>
+            </div>
+          </section>
+
           <!-- Screen 2: 동승 후보 리스트 (+ 확인 모달) -->
           <section class="screen" id="screen-list" aria-label="동승 후보 목록">
             <div class="list-head">

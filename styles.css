@@ -193,6 +193,58 @@ body{
   .screen{animation:none;}
 }
 
+.screen.map-pick-screen{padding:0;}
+.map-pick-header{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:16px 18px 10px;
+  flex-shrink:0;
+}
+.icon-btn{
+  width:32px; height:32px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  background:var(--surface);
+  color:var(--ink);
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer;
+  flex-shrink:0;
+}
+.icon-btn:hover{border-color:var(--accent-deep);}
+.icon-btn:focus-visible{outline:2px solid var(--accent-deep); outline-offset:2px;}
+.map-pick-canvas-wrap{
+  position:relative;
+  flex:1;
+  background:var(--surface-2);
+  overflow:hidden;
+}
+#map-canvas{position:absolute; inset:0;}
+.map-pin{
+  position:absolute;
+  left:50%; top:50%;
+  transform:translate(-50%,-100%);
+  pointer-events:none;
+  color:var(--accent-deep);
+  filter:drop-shadow(0 3px 4px var(--shadow-strong));
+}
+.map-pick-sheet{
+  padding:16px 18px 20px;
+  border-top:1px solid var(--border);
+  background:var(--surface);
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  flex-shrink:0;
+}
+.map-pick-address{
+  margin:0;
+  font-size:14px;
+  font-weight:700;
+  color:var(--ink);
+  min-height:20px;
+}
+
 .screen-title{
   font-family:'Gothic A1', sans-serif;
   font-weight:800;
