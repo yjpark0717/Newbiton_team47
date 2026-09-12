@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>택시 동승 매칭 프로토타입</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gothic+A1:wght@500;700;800&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page">
+    <div class="intro">
+      <span class="eyebrow">Carpool UI Flow</span>
+      <h1>택시 동승 매칭 프로토타입</h1>
+      <p>출발지·목적지 입력부터 동승 상대 선택, 매칭 완료까지의 화면 흐름입니다. 지도·요금 계산 로직은 붙어 있지 않고, 화면 전환만 확인할 수 있어요.</p>
+      <div class="checker" aria-hidden="true"></div>
+    </div>
+
+    <div class="layout">
+      <div class="phone">
+        <div class="phone-notch"></div>
+        <div class="phone-screen">
+
+          <!-- Screen 1: 위치 설정 -->
+          <section class="screen is-active" id="screen-location" aria-label="위치 설정">
+            <h2 class="screen-title">어디로 이동하시나요?</h2>
+            <p class="screen-sub">출발지와 목적지를 입력하면 동선이 겹치는 동승 후보를 찾아드려요.</p>
+
+            <div class="form-stack">
+              <div class="field">
+                <label for="input-origin">출발지</label>
+                <div class="input-row">
+                  <input id="input-origin" type="text" value="강남역 2번 출구" autocomplete="off" />
+                  <button class="locate-btn" id="btn-locate" type="button" aria-label="현재 위치 불러오기" title="현재 위치 불러오기">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="route-link">
+                <span class="dots"><span></span><span></span><span></span></span>
+                <span>경유 없이 한 번에 이동</span>
+              </div>
+
+              <div class="field">
+                <label for="input-dest">목적지</label>
+                <div class="input-row">
+                  <input id="input-dest" type="text" value="판교역 1번 출구" autocomplete="off" />
+                </div>
+              </div>
+            </div>
+
+            <div class="spacer"></div>
+            <button class="btn btn-primary" id="btn-find">동승 가능한 사람 찾기</button>
+          </section>
+
+          <!-- Screen 2: 동승 후보 리스트 (+ 확인 모달) -->
+          <section class="screen" id="screen-list" aria-label="동승 후보 목록">
+            <div class="list-head">
+              <h2 class="screen-title" style="margin:0;">동승 후보</h2>
+              <span class="sort-pill">절약 금액순 ▾</span>
+            </div>
+            <p class="screen-sub">우회 시간과 절약 금액을 비교해 함께 탈 상대를 선택하세요.</p>
+
+            <div class="list-wrap">
+              <div class="card-list" id="card-list"></div>
+              <div class="dim" id="dim"></div>
+              <div class="confirm-card" id="confirm-card">
+                <div class="rider-card" id="confirm-preview"></div>
+                <p class="confirm-q">동승 요청 하시겠습니까?</p>
+                <div class="confirm-actions">
+                  <button class="btn btn-outline" id="btn-decline">아니오</button>
+                  <button class="btn btn-primary" id="btn-accept">네</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Screen 3: 대기 -->
+          <section class="screen" id="screen-waiting" aria-label="요청 대기">
+            <div class="center-screen">
+              <div class="spinner" role="status" aria-label="대기 중"></div>
+              <div>
+                <h2>상대 요청 기다리는 중..</h2>
+                <p>잠시만 기다려 주세요</p>
+              </div>
+            </div>
+            <button class="btn btn-outline" id="btn-cancel">취소</button>
+          </section>
+
+          <!-- Screen 4: 매칭 완료 -->
+          <section class="screen" id="screen-matched" aria-label="매칭 완료">
+            <div class="center-screen">
+              <div class="check-badge">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              </div>
+              <div>
+                <h2>매칭 되었습니다</h2>
+                <p>택시를 호출하겠습니다.</p>
+              </div>
+              <div class="fare-note" id="fare-note"></div>
+            </div>
+            <button class="btn btn-ghost" id="btn-restart">처음 화면으로</button>
+          </section>
+
+        </div>
+      </div>
+    </div>
+
+    <div class="rail" id="rail"></div>
+    <p class="rail-caption">위 버튼으로 각 화면을 바로 미리볼 수 있습니다 (데모 이동용 · 실제 화면 흐름에는 없음).</p>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
