@@ -565,11 +565,13 @@ body{
   font-size:13px;
   color:var(--ink-muted);
   display:flex;
-  justify-content:space-between;
-  gap:18px;
+  flex-direction:column;
+  gap:6px;
   width:100%;
 }
+.fare-note-row{display:flex; justify-content:space-between; gap:18px;}
 .fare-note b{color:var(--success); font-weight:700;}
+.fare-note b.fare-pay{color:var(--ink);}
 
 /* step rail below phone */
 .rail{

@@ -92,6 +92,17 @@ function getSegment(order, points, start, end) {
   return order.slice(startIndex, endIndex + 1).map((stop) => points[stop]);
 }
 
+function splitFareBySoloFare(totalFare, ownerSoloFare, requesterSoloFare) {
+  const combinedSoloFare = ownerSoloFare + requesterSoloFare;
+  if (combinedSoloFare <= 0) {
+    const ownerPay = Math.round(totalFare / 2);
+    return { ownerPay, requesterPay: totalFare - ownerPay };
+  }
+
+  const ownerPay = Math.round(totalFare * ownerSoloFare / combinedSoloFare);
+  return { ownerPay, requesterPay: totalFare - ownerPay };
+}
+
 async function compareWithNaver(input) {
   const points = {
     A_START: input.ownerRide.start,
@@ -111,8 +122,11 @@ async function compareWithNaver(input) {
       getNaverCarRoute(ownerSharedPoints),
       getNaverCarRoute(requesterSharedPoints),
     ]);
-    const ownerPay = route.taxiFare / 2;
-    const requesterPay = route.taxiFare / 2;
+    const { ownerPay, requesterPay } = splitFareBySoloFare(
+      route.taxiFare,
+      ownerAlone.taxiFare,
+      requesterAlone.taxiFare,
+    );
     const ownerSaved = ownerAlone.taxiFare - ownerPay;
     const requesterSaved = requesterAlone.taxiFare - requesterPay;
     const ownerExtraSeconds = ownerSharedRoute.durationSeconds - ownerAlone.durationSeconds;
