@@ -1,25 +1,57 @@
 (function(){
-  // Firestore를 "공유 상태 저장소"로 써서 서로 다른 기기의 탭끼리 통신하는 데모용 구현.
-  // 실제 서비스에서는 지도/거리 계산 담당이 만드는 매칭 서버가 이 자리를 대신하게 됨.
+  // Firestore를 "공유 상태 저장소"로 써서 서로 다른 기기의 탭끼리 통신하고,
+  // 우회 시간/절약 금액은 server.js의 /api/route-compare(네이버 지도 API)로 실제 계산한다.
+  // 서버가 없거나 API 키가 없으면 routeCompare.browser.js의 추정치로 자동 대체된다.
   var INCOMING_MS = 20000;
   var PRESENCE_INTERVAL_MS = 3000;
   var PEER_TIMEOUT_MS = 8000;
   var REQUEST_TIMEOUT_MS = 25000;
 
+  // 지오코딩(주소->좌표) 서버 호출이 실패했을 때 쓰는 대체 지점 목록(서울 주요 역).
+  var RIDE_POOL = [
+    { lat: 37.4979, lng: 127.0276, name: '강남역' },
+    { lat: 37.5048, lng: 127.0254, name: '신논현역' },
+    { lat: 37.5065, lng: 127.0537, name: '삼성역' },
+    { lat: 37.5172, lng: 127.0473, name: '잠실역' },
+    { lat: 37.4980, lng: 127.0495, name: '양재역' },
+    { lat: 37.3947, lng: 127.1112, name: '판교역' }
+  ];
+
   var screens = ['location','list','waiting','matched'];
   var railLabels = { location:'1. 위치 설정', list:'2. 동승자 선택', waiting:'3. 요청 대기', matched:'4. 매칭 완료' };
   var current = 'location';
 
-  var peers = {};           // id -> {id, name, detour, save}  (staleness 걸러낸 결과)
-  var rawPresence = {};     // id -> {name, detour, save, updatedAt}  (서버에서 받은 원본)
+  var peers = {};           // id -> {id, name, ride}
+  var rawPresence = {};     // id -> {name, ride, updatedAt}
   var incoming = [];        // [{requestId, fromId, fromName, detour, save, expiresAt}]
   var pendingRequest = null; // {requestId, toId, toName, detour, save}
   var pendingTimeoutHandle = null;
   var confirmTargetPeer = null;
+  var confirmTargetRoute = null;
   var selectedRider = null;
   var isVisible = false; // "동승 가능한 사람 찾기"를 눌러야 다른 사람에게 후보로 보임
+  var routeCache = {};   // peerId -> {status:'loading'|'ready'|'error', detourMin, save, theirDetourMin, theirSave}
 
   var me = loadOrCreateIdentity();
+
+  function hashString(str){
+    var h = 0;
+    for (var i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) | 0; }
+    return Math.abs(h);
+  }
+  function fallbackGeocode(address){
+    var base = RIDE_POOL[hashString(address || '') % RIDE_POOL.length];
+    return { lat: base.lat, lng: base.lng, name: address || base.name };
+  }
+  function geocode(address){
+    if (!address) return Promise.resolve(fallbackGeocode(address));
+    return fetch('/api/geocode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: address })
+    }).then(function(res){
+      if (!res.ok) throw new Error('geocode failed');
+      return res.json();
+    }).catch(function(){ return fallbackGeocode(address); });
+  }
 
   function loadOrCreateIdentity(){
     var id = sessionStorage.getItem('carpool-demo-my-id');
@@ -27,18 +59,15 @@
       id = Math.random().toString(36).slice(2, 7).toUpperCase();
       sessionStorage.setItem('carpool-demo-my-id', id);
     }
-    var stats;
-    var statsRaw = sessionStorage.getItem('carpool-demo-my-stats');
-    if (statsRaw) {
-      stats = JSON.parse(statsRaw);
+    var ride;
+    var rideRaw = sessionStorage.getItem('carpool-demo-my-ride');
+    if (rideRaw) {
+      ride = JSON.parse(rideRaw);
     } else {
-      stats = {
-        detour: 2 + Math.floor(Math.random() * 10),
-        save: 1000 * (1 + Math.floor(Math.random() * 6))
-      };
-      sessionStorage.setItem('carpool-demo-my-stats', JSON.stringify(stats));
+      ride = { start: RIDE_POOL[0], end: RIDE_POOL[5] };
+      sessionStorage.setItem('carpool-demo-my-ride', JSON.stringify(ride));
     }
-    return { id: id, name: '이용자 ' + id, detour: stats.detour, save: stats.save };
+    return { id: id, name: '이용자 ' + id, ride: ride };
   }
 
   // ---- Firebase 연결 ----
@@ -54,11 +83,51 @@
     document.getElementById('protocol-warning').hidden = false;
   }
 
+  // ---- 경로 비교 (실서버 -> 실패 시 브라우저 추정치로 대체) ----
+  function compareRide(myRide, peerRide){
+    var input = { ownerRide: myRide, requesterRide: peerRide };
+    return fetch('/api/route-compare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input)
+    }).then(function(res){
+      return res.json().then(function(data){
+        if (!res.ok) throw new Error(data.error || '경로 비교 실패');
+        return data;
+      });
+    }).catch(function(){
+      if (window.compareSharedRideMock) return window.compareSharedRideMock(input);
+      return Promise.reject(new Error('경로 비교를 할 수 없습니다.'));
+    });
+  }
+  function pickBestCandidate(result){
+    if (result.bestCandidate) return result.bestCandidate;
+    return result.candidates.reduce(function(best, c){
+      return (!best || c.ownerSaved > best.ownerSaved) ? c : best;
+    }, null);
+  }
+  function ensureRouteFor(peer){
+    if (routeCache[peer.id]) return;
+    routeCache[peer.id] = { status: 'loading' };
+    compareRide(me.ride, peer.ride).then(function(result){
+      var best = pickBestCandidate(result);
+      routeCache[peer.id] = {
+        status: 'ready',
+        detourMin: Math.max(0, Math.round(best.ownerExtraSeconds / 60)),
+        save: Math.max(0, Math.round(best.ownerSaved)),
+        theirDetourMin: Math.max(0, Math.round(best.requesterExtraSeconds / 60)),
+        theirSave: Math.max(0, Math.round(best.requesterSaved))
+      };
+      if (current === 'list') renderList();
+    }).catch(function(){
+      routeCache[peer.id] = { status: 'error' };
+      if (current === 'list') renderList();
+    });
+  }
+
   // ---- 내 존재를 알리기(presence) ----
   var unsubPresence = null;
   function writePresence(){
     if (!presenceCol) return;
-    presenceCol.doc(me.id).set({ name: me.name, detour: me.detour, save: me.save, updatedAt: Date.now() }).catch(console.error);
+    presenceCol.doc(me.id).set({ name: me.name, ride: me.ride, updatedAt: Date.now() }).catch(console.error);
   }
   function watchPresence(){
     if (!presenceCol || unsubPresence) return;
@@ -82,7 +151,7 @@
     Object.keys(rawPresence).forEach(function(id){
       var data = rawPresence[id];
       if (now - data.updatedAt > PEER_TIMEOUT_MS) return;
-      peers[id] = { id: id, name: data.name, detour: data.detour, save: data.save };
+      peers[id] = { id: id, name: data.name, ride: data.ride };
     });
     if (current === 'list') renderList();
   }
@@ -184,15 +253,32 @@
         '<div class="stat-line"><span class="stat-label">절약 금액</span><span class="stat-value save">-' + r.save.toLocaleString('ko-KR') + '원</span></div>' +
       '</div>';
   }
+  function riderPendingHTML(peer, label){
+    return '<div class="avatar">' + personIcon() + '</div>' +
+      '<div class="rider-stats">' +
+        '<div class="rider-name">' + peer.name + '</div>' +
+        '<div class="stat-line"><span class="stat-label">' + label + '</span></div>' +
+      '</div>';
+  }
 
   var cardList = document.getElementById('card-list');
 
-  function buildRiderCard(p){
+  function buildRiderCard(peer){
+    var cache = routeCache[peer.id];
+    if (!cache) { ensureRouteFor(peer); cache = routeCache[peer.id]; }
     var btn = document.createElement('button');
     btn.className = 'rider-card';
     btn.type = 'button';
-    btn.innerHTML = riderInfoHTML(p) + '<span class="chevron">' + chevronIcon() + '</span>';
-    btn.addEventListener('click', function(){ openConfirm(p); });
+    if (cache.status === 'loading') {
+      btn.disabled = true;
+      btn.innerHTML = riderPendingHTML(peer, '경로 계산 중…');
+    } else if (cache.status === 'error') {
+      btn.disabled = true;
+      btn.innerHTML = riderPendingHTML(peer, '경로 계산 실패');
+    } else {
+      btn.innerHTML = riderInfoHTML({ name: peer.name, detour: cache.detourMin, save: cache.save }) + '<span class="chevron">' + chevronIcon() + '</span>';
+      btn.addEventListener('click', function(){ openConfirm(peer, cache); });
+    }
     return btn;
   }
 
@@ -262,13 +348,13 @@
     }
   }
 
-  function sendRequestTo(peer){
+  function sendRequestTo(peer, cache){
     if (!requestsCol) return;
     var requestId = me.id + '-' + Date.now();
-    pendingRequest = { requestId: requestId, toId: peer.id, toName: peer.name, detour: peer.detour, save: peer.save };
+    pendingRequest = { requestId: requestId, toId: peer.id, toName: peer.name, detour: cache.detourMin, save: cache.save };
     requestsCol.doc(requestId).set({
       fromId: me.id, fromName: me.name, toId: peer.id, toName: peer.name,
-      detour: peer.detour, save: peer.save, status: 'pending', createdAt: Date.now()
+      detour: cache.theirDetourMin, save: cache.theirSave, status: 'pending', createdAt: Date.now()
     }).catch(console.error);
     watchOutgoing(requestId);
     clearPendingTimeout();
@@ -324,9 +410,10 @@
   var confirmCard = document.getElementById('confirm-card');
   var confirmPreview = document.getElementById('confirm-preview');
 
-  function openConfirm(p){
-    confirmTargetPeer = p;
-    confirmPreview.innerHTML = riderInfoHTML(p);
+  function openConfirm(peer, cache){
+    confirmTargetPeer = peer;
+    confirmTargetRoute = cache;
+    confirmPreview.innerHTML = riderInfoHTML({ name: peer.name, detour: cache.detourMin, save: cache.save });
     dim.classList.add('is-active');
     confirmCard.classList.add('is-active');
   }
@@ -334,6 +421,7 @@
     dim.classList.remove('is-active');
     confirmCard.classList.remove('is-active');
     confirmTargetPeer = null;
+    confirmTargetRoute = null;
   }
 
   function renderFareNote(){
@@ -346,12 +434,26 @@
   document.getElementById('btn-locate').addEventListener('click', function(){
     document.getElementById('input-origin').value = '현재 위치 (내 GPS 좌표)';
   });
-  document.getElementById('btn-find').addEventListener('click', function(){ goTo('list'); });
+  document.getElementById('btn-find').addEventListener('click', function(){
+    var findBtn = document.getElementById('btn-find');
+    var originText = document.getElementById('input-origin').value.trim();
+    var destText = document.getElementById('input-dest').value.trim();
+    findBtn.disabled = true;
+    Promise.all([geocode(originText), geocode(destText)]).then(function(points){
+      me.ride = { start: points[0], end: points[1] };
+      sessionStorage.setItem('carpool-demo-my-ride', JSON.stringify(me.ride));
+      routeCache = {}; // 내 출발/도착지가 바뀌었을 수 있으니 이전 계산 결과는 버린다.
+    }).catch(function(){ /* geocode()는 실패해도 대체 좌표로 resolve하므로 사실상 발생하지 않음 */ }).then(function(){
+      findBtn.disabled = false;
+      goTo('list');
+    });
+  });
   document.getElementById('btn-decline').addEventListener('click', closeConfirm);
   document.getElementById('btn-accept').addEventListener('click', function(){
     var target = confirmTargetPeer;
+    var cache = confirmTargetRoute;
     closeConfirm();
-    if (target) sendRequestTo(target);
+    if (target && cache) sendRequestTo(target, cache);
   });
   document.getElementById('btn-cancel').addEventListener('click', function(){
     cancelPendingRequest();
