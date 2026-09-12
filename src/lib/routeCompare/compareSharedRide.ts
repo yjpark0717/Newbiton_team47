@@ -65,6 +65,24 @@ function getPassengerSegment(
   return order.slice(startIndex, endIndex + 1).map((stopId) => points[stopId]);
 }
 
+/** Splits the shared fare in proportion to what each passenger would pay alone. */
+function splitFareBySoloFare(
+  totalFare: number,
+  ownerSoloFare: number,
+  requesterSoloFare: number,
+): { ownerPay: number; requesterPay: number } {
+  const combinedSoloFare = ownerSoloFare + requesterSoloFare;
+  if (combinedSoloFare <= 0) {
+    const ownerPay = Math.round(totalFare / 2);
+    return { ownerPay, requesterPay: totalFare - ownerPay };
+  }
+
+  const ownerPay = Math.round(
+    (totalFare * ownerSoloFare) / combinedSoloFare,
+  );
+  return { ownerPay, requesterPay: totalFare - ownerPay };
+}
+
 /** Calculates the comparison values for one shared-route candidate. */
 async function createCandidateResult(
   definition: CandidateDefinition,
@@ -92,8 +110,11 @@ async function createCandidateResult(
     getCarRoute(requesterSharedPoints),
   ]);
   const totalFare = route.taxiFare;
-  const ownerPay = totalFare / 2;
-  const requesterPay = totalFare / 2;
+  const { ownerPay, requesterPay } = splitFareBySoloFare(
+    totalFare,
+    ownerAlone.taxiFare,
+    requesterAlone.taxiFare,
+  );
   const ownerSaved = ownerAlone.taxiFare - ownerPay;
   const requesterSaved = requesterAlone.taxiFare - requesterPay;
   const ownerExtraSeconds =

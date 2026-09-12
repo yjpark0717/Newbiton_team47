@@ -44,6 +44,17 @@
     return order.slice(startIndex, endIndex + 1).map(function (stop) { return points[stop]; });
   }
 
+  function splitFareBySoloFare(totalFare, ownerSoloFare, requesterSoloFare) {
+    var combinedSoloFare = ownerSoloFare + requesterSoloFare;
+    if (combinedSoloFare <= 0) {
+      var equalOwnerPay = Math.round(totalFare / 2);
+      return { ownerPay: equalOwnerPay, requesterPay: totalFare - equalOwnerPay };
+    }
+
+    var ownerPay = Math.round(totalFare * ownerSoloFare / combinedSoloFare);
+    return { ownerPay: ownerPay, requesterPay: totalFare - ownerPay };
+  }
+
   function compare(input) {
     var points = {
       A_START: input.ownerRide.start,
@@ -58,8 +69,13 @@
       var fullRoute = route(order.map(function (stop) { return points[stop]; }));
       var ownerSharedRoute = route(segment(order, points, 'A_START', 'A_END'));
       var requesterSharedRoute = route(segment(order, points, 'B_START', 'B_END'));
-      var ownerPay = fullRoute.taxiFare / 2;
-      var requesterPay = fullRoute.taxiFare / 2;
+      var fareSplit = splitFareBySoloFare(
+        fullRoute.taxiFare,
+        ownerAlone.taxiFare,
+        requesterAlone.taxiFare
+      );
+      var ownerPay = fareSplit.ownerPay;
+      var requesterPay = fareSplit.requesterPay;
       var ownerSaved = ownerAlone.taxiFare - ownerPay;
       var requesterSaved = requesterAlone.taxiFare - requesterPay;
       var ownerExtraSeconds = ownerSharedRoute.durationSeconds - ownerAlone.durationSeconds;

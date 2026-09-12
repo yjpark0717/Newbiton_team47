@@ -24,14 +24,14 @@
 
   var peers = {};           // id -> {id, name, ride}
   var rawPresence = {};     // id -> {name, ride, updatedAt}
-  var incoming = [];        // [{requestId, fromId, fromName, detour, save, expiresAt}]
-  var pendingRequest = null; // {requestId, toId, toName, detour, save}
+  var incoming = [];        // [{requestId, fromId, fromName, detour, pay, save, expiresAt}]
+  var pendingRequest = null; // {requestId, toId, toName, detour, pay, save}
   var pendingTimeoutHandle = null;
   var confirmTargetPeer = null;
   var confirmTargetRoute = null;
   var selectedRider = null;
   var isVisible = false; // "동승 가능한 사람 찾기"를 눌러야 다른 사람에게 후보로 보임
-  var routeCache = {};   // peerId -> {status:'loading'|'ready'|'error', detourMin, save, theirDetourMin, theirSave}
+  var routeCache = {};   // peerId -> {status:'loading'|'ready'|'error', detourMin, pay, save, theirDetourMin, theirPay, theirSave}
 
   // 지도에서 직접 위치를 고르는 모드(가능하면 이걸 우선 사용, 안 되면 텍스트 입력으로 대체)
   var mapModeEnabled = false;
@@ -215,8 +215,10 @@
       routeCache[peer.id] = {
         status: 'ready',
         detourMin: Math.max(0, Math.round(best.ownerExtraSeconds / 60)),
+        pay: Math.max(0, Math.round(best.ownerPay)),
         save: Math.max(0, Math.round(best.ownerSaved)),
         theirDetourMin: Math.max(0, Math.round(best.requesterExtraSeconds / 60)),
+        theirPay: Math.max(0, Math.round(best.requesterPay)),
         theirSave: Math.max(0, Math.round(best.requesterSaved))
       };
       if (current === 'list') renderList();
@@ -268,7 +270,7 @@
         .filter(function(d){ return d.data().status === 'pending'; })
         .map(function(d){
           var data = d.data();
-          return { requestId: d.id, fromId: data.fromId, fromName: data.fromName, detour: data.detour, save: data.save, expiresAt: data.createdAt + INCOMING_MS };
+          return { requestId: d.id, fromId: data.fromId, fromName: data.fromName, detour: data.detour, pay: data.pay, save: data.save, expiresAt: data.createdAt + INCOMING_MS };
         });
       if (current === 'list') renderList();
     }, console.error);
@@ -319,7 +321,7 @@
       if (data.status === 'accepted') {
         clearPendingTimeout();
         unwatchOutgoing();
-        selectedRider = { name: pendingRequest.toName, save: pendingRequest.save };
+        selectedRider = { name: pendingRequest.toName, pay: pendingRequest.pay, save: pendingRequest.save };
         pendingRequest = null;
         renderFareNote();
         goTo('matched');
@@ -349,10 +351,14 @@
     return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
   }
   function riderInfoHTML(r){
+    var payLine = typeof r.pay === 'number'
+      ? '<div class="stat-line"><span class="stat-label">내가 낼 예상 금액</span><span class="stat-value">' + r.pay.toLocaleString('ko-KR') + '원</span></div>'
+      : '';
     return '<div class="avatar">' + personIcon() + '</div>' +
       '<div class="rider-stats">' +
         '<div class="rider-name">' + r.name + '</div>' +
         '<div class="stat-line"><span class="stat-label">우회 시간</span><span class="stat-value">+' + r.detour + '분</span></div>' +
+        payLine +
         '<div class="stat-line"><span class="stat-label">절약 금액</span><span class="stat-value save">-' + r.save.toLocaleString('ko-KR') + '원</span></div>' +
       '</div>';
   }
@@ -379,7 +385,7 @@
       btn.disabled = true;
       btn.innerHTML = riderPendingHTML(peer, '경로 계산 실패');
     } else {
-      btn.innerHTML = riderInfoHTML({ name: peer.name, detour: cache.detourMin, save: cache.save }) + '<span class="chevron">' + chevronIcon() + '</span>';
+      btn.innerHTML = riderInfoHTML({ name: peer.name, detour: cache.detourMin, pay: cache.pay, save: cache.save }) + '<span class="chevron">' + chevronIcon() + '</span>';
       btn.addEventListener('click', function(){ openConfirm(peer, cache); });
     }
     return btn;
@@ -393,7 +399,7 @@
     var pct = Math.max(0, Math.min(100, (r.expiresAt - Date.now()) / INCOMING_MS * 100));
     wrap.innerHTML =
       '<div class="incoming-head"><span class="badge-incoming">동승 요청 도착</span></div>' +
-      '<div class="rider-card-inner">' + riderInfoHTML({ name: r.fromName, detour: r.detour, save: r.save }) + '</div>' +
+      '<div class="rider-card-inner">' + riderInfoHTML({ name: r.fromName, detour: r.detour, pay: r.pay, save: r.save }) + '</div>' +
       '<p class="incoming-note"><span class="countdown-num">' + remainSec + '</span>초 이내에 동승 수락 여부를 선택해주세요</p>' +
       '<div class="incoming-bar"><div class="incoming-bar-fill" style="width:' + pct + '%"></div></div>' +
       '<div class="incoming-actions">' +
@@ -416,7 +422,7 @@
     if (requestsCol) requestsCol.doc(r.requestId).update({ status: decision === 'accept' ? 'accepted' : 'declined' }).catch(console.error);
     incoming = incoming.filter(function(x){ return x.requestId !== r.requestId; });
     if (decision === 'accept') {
-      selectedRider = { name: r.fromName, save: r.save };
+      selectedRider = { name: r.fromName, pay: r.pay, save: r.save };
       renderFareNote();
       goTo('matched');
     } else if (current === 'list') {
@@ -454,10 +460,10 @@
   function sendRequestTo(peer, cache){
     if (!requestsCol) return;
     var requestId = me.id + '-' + Date.now();
-    pendingRequest = { requestId: requestId, toId: peer.id, toName: peer.name, detour: cache.detourMin, save: cache.save };
+    pendingRequest = { requestId: requestId, toId: peer.id, toName: peer.name, detour: cache.detourMin, pay: cache.pay, save: cache.save };
     requestsCol.doc(requestId).set({
       fromId: me.id, fromName: me.name, toId: peer.id, toName: peer.name,
-      detour: cache.theirDetourMin, save: cache.theirSave, status: 'pending', createdAt: Date.now()
+      detour: cache.theirDetourMin, pay: cache.theirPay, save: cache.theirSave, status: 'pending', createdAt: Date.now()
     }).catch(console.error);
     watchOutgoing(requestId);
     clearPendingTimeout();
@@ -516,7 +522,7 @@
   function openConfirm(peer, cache){
     confirmTargetPeer = peer;
     confirmTargetRoute = cache;
-    confirmPreview.innerHTML = riderInfoHTML({ name: peer.name, detour: cache.detourMin, save: cache.save });
+    confirmPreview.innerHTML = riderInfoHTML({ name: peer.name, detour: cache.detourMin, pay: cache.pay, save: cache.save });
     dim.classList.add('is-active');
     confirmCard.classList.add('is-active');
   }
@@ -531,7 +537,10 @@
     var note = document.getElementById('fare-note');
     if (!selectedRider) { note.hidden = true; note.innerHTML = ''; return; }
     note.hidden = false;
-    note.innerHTML = '<span>' + selectedRider.name + '님과 동승 · 절약 금액</span><b>' + selectedRider.save.toLocaleString('ko-KR') + '원</b>';
+    var payRow = typeof selectedRider.pay === 'number'
+      ? '<div class="fare-note-row"><span>' + selectedRider.name + '님과 동승 · 내가 낼 예상 금액</span><b class="fare-pay">' + selectedRider.pay.toLocaleString('ko-KR') + '원</b></div>'
+      : '';
+    note.innerHTML = payRow + '<div class="fare-note-row"><span>절약 금액</span><b>' + selectedRider.save.toLocaleString('ko-KR') + '원</b></div>';
   }
 
   document.getElementById('btn-locate').addEventListener('click', function(){
