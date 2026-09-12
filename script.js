@@ -69,7 +69,7 @@
     if (naverMapsReady) return naverMapsReady;
     naverMapsReady = new Promise(function(resolve, reject){
       var script = document.createElement('script');
-      script.src = 'https://oapi.map.naver.com/openapi/v3/maps.js?ncpClientId=' + encodeURIComponent(clientId);
+      script.src = 'https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=' + encodeURIComponent(clientId);
       script.onload = function(){ resolve(); };
       script.onerror = function(){ reject(new Error('네이버 지도 스크립트를 불러오지 못했습니다.')); };
       document.head.appendChild(script);
