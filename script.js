@@ -1,7 +1,6 @@
 (function(){
-  // 같은 브라우저에서 연 여러 탭끼리 BroadcastChannel로 직접 통신하는 데모용 구현.
-  // 실제 서비스에서는 지도/거리 계산 담당이 만드는 서버가 이 자리를 대신하게 됨.
-  var CHANNEL_NAME = 'carpool-demo-v1';
+  // Firestore를 "공유 상태 저장소"로 써서 서로 다른 기기의 탭끼리 통신하는 데모용 구현.
+  // 실제 서비스에서는 지도/거리 계산 담당이 만드는 매칭 서버가 이 자리를 대신하게 됨.
   var INCOMING_MS = 20000;
   var PRESENCE_INTERVAL_MS = 3000;
   var PEER_TIMEOUT_MS = 8000;
@@ -11,13 +10,14 @@
   var railLabels = { location:'1. 위치 설정', list:'2. 동승자 선택', waiting:'3. 요청 대기', matched:'4. 매칭 완료' };
   var current = 'location';
 
-  var peers = {};           // id -> {id, name, detour, save, lastSeen}
+  var peers = {};           // id -> {id, name, detour, save}  (staleness 걸러낸 결과)
+  var rawPresence = {};     // id -> {name, detour, save, updatedAt}  (서버에서 받은 원본)
   var incoming = [];        // [{requestId, fromId, fromName, detour, save, expiresAt}]
   var pendingRequest = null; // {requestId, toId, toName, detour, save}
   var pendingTimeoutHandle = null;
   var confirmTargetPeer = null;
   var selectedRider = null;
-  var isVisible = false; // "동승 가능한 사람 찾기"를 눌러야 다른 탭에 후보로 보임
+  var isVisible = false; // "동승 가능한 사람 찾기"를 눌러야 다른 사람에게 후보로 보임
 
   var me = loadOrCreateIdentity();
 
@@ -41,90 +41,90 @@
     return { id: id, name: '이용자 ' + id, detour: stats.detour, save: stats.save };
   }
 
-  var channel = (typeof BroadcastChannel !== 'undefined') ? new BroadcastChannel(CHANNEL_NAME) : null;
-  function send(msg){ if (channel) channel.postMessage(msg); }
+  // ---- Firebase 연결 ----
+  var configReady = typeof firebase !== 'undefined' && window.FIREBASE_CONFIG &&
+    window.FIREBASE_CONFIG.apiKey && window.FIREBASE_CONFIG.apiKey.indexOf('입력') === -1;
+  var db = null, presenceCol = null, requestsCol = null;
+  if (configReady) {
+    firebase.initializeApp(window.FIREBASE_CONFIG);
+    db = firebase.firestore();
+    presenceCol = db.collection('presence');
+    requestsCol = db.collection('requests');
+  } else {
+    document.getElementById('protocol-warning').hidden = false;
+  }
 
-  if (channel) {
-    channel.onmessage = function(ev){
-      var msg = ev.data || {};
-      if (msg.type === 'hello') {
-        if (msg.id !== me.id && isVisible) broadcastPresence();
-        return;
-      }
-      if (msg.type === 'presence') {
-        if (msg.id === me.id) return;
-        peers[msg.id] = { id: msg.id, name: msg.name, detour: msg.detour, save: msg.save, lastSeen: Date.now() };
-        if (current === 'list') renderList();
-        return;
-      }
-      if (msg.type === 'bye') {
-        if (peers[msg.id]) { delete peers[msg.id]; if (current === 'list') renderList(); }
-        return;
-      }
-      if (msg.toId !== me.id) return; // 나머지 메시지는 수신 대상이 나일 때만 처리
-      if (msg.type === 'request') {
-        incoming.push({
-          requestId: msg.requestId, fromId: msg.fromId, fromName: msg.fromName,
-          detour: msg.detour, save: msg.save, expiresAt: Date.now() + INCOMING_MS
+  // ---- 내 존재를 알리기(presence) ----
+  var unsubPresence = null;
+  function writePresence(){
+    if (!presenceCol) return;
+    presenceCol.doc(me.id).set({ name: me.name, detour: me.detour, save: me.save, updatedAt: Date.now() }).catch(console.error);
+  }
+  function watchPresence(){
+    if (!presenceCol || unsubPresence) return;
+    unsubPresence = presenceCol.onSnapshot(function(snapshot){
+      rawPresence = {};
+      snapshot.forEach(function(docSnap){
+        if (docSnap.id === me.id) return;
+        rawPresence[docSnap.id] = docSnap.data();
+      });
+      refreshPeersFromRaw();
+    }, console.error);
+  }
+  function unwatchPresence(){
+    if (unsubPresence) { unsubPresence(); unsubPresence = null; }
+    rawPresence = {};
+    peers = {};
+  }
+  function refreshPeersFromRaw(){
+    var now = Date.now();
+    peers = {};
+    Object.keys(rawPresence).forEach(function(id){
+      var data = rawPresence[id];
+      if (now - data.updatedAt > PEER_TIMEOUT_MS) return;
+      peers[id] = { id: id, name: data.name, detour: data.detour, save: data.save };
+    });
+    if (current === 'list') renderList();
+  }
+
+  // ---- 나에게 온 요청(incoming) ----
+  var unsubIncoming = null;
+  function watchIncoming(){
+    if (!requestsCol || unsubIncoming) return;
+    unsubIncoming = requestsCol.where('toId', '==', me.id).onSnapshot(function(snapshot){
+      incoming = snapshot.docs
+        .filter(function(d){ return d.data().status === 'pending'; })
+        .map(function(d){
+          var data = d.data();
+          return { requestId: d.id, fromId: data.fromId, fromName: data.fromName, detour: data.detour, save: data.save, expiresAt: data.createdAt + INCOMING_MS };
         });
-        if (current === 'list') renderList();
-      } else if (msg.type === 'cancel') {
-        incoming = incoming.filter(function(r){ return r.requestId !== msg.requestId; });
-        if (current === 'list') renderList();
-      } else if (msg.type === 'accept') {
-        if (pendingRequest && pendingRequest.requestId === msg.requestId) {
-          clearPendingTimeout();
-          selectedRider = { name: pendingRequest.toName, save: pendingRequest.save };
-          pendingRequest = null;
-          renderFareNote();
-          goTo('matched');
-        }
-      } else if (msg.type === 'decline') {
-        if (pendingRequest && pendingRequest.requestId === msg.requestId) {
-          clearPendingTimeout();
-          pendingRequest = null;
-          showListNotice('상대가 동승 요청을 거절했어요.');
-          goTo('list');
-        }
-      }
-    };
+      if (current === 'list') renderList();
+    }, console.error);
+  }
+  function unwatchIncoming(){
+    if (unsubIncoming) { unsubIncoming(); unsubIncoming = null; }
+    incoming = [];
   }
 
-  function broadcastPresence(){
-    send({ type:'presence', id: me.id, name: me.name, detour: me.detour, save: me.save });
-  }
-  function clearPendingTimeout(){
-    if (pendingTimeoutHandle) { clearTimeout(pendingTimeoutHandle); pendingTimeoutHandle = null; }
-  }
-  function cancelPendingRequest(){
-    if (!pendingRequest) return;
-    send({ type:'cancel', requestId: pendingRequest.requestId, toId: pendingRequest.toId });
-    clearPendingTimeout();
-    pendingRequest = null;
-  }
   function becomeVisible(){
-    if (isVisible) return;
+    if (isVisible || !configReady) return;
     isVisible = true;
-    broadcastPresence();
-    send({ type:'hello', id: me.id }); // 이미 검색 중인 다른 탭들의 정보를 즉시 받아오기
+    writePresence();
+    watchPresence();
+    watchIncoming();
   }
   function becomeHidden(){
     if (!isVisible) return;
     isVisible = false;
-    send({ type:'bye', id: me.id });
+    if (presenceCol) presenceCol.doc(me.id).delete().catch(console.error);
+    unwatchPresence();
+    unwatchIncoming();
   }
 
-  setInterval(function(){ if (isVisible) broadcastPresence(); }, PRESENCE_INTERVAL_MS);
-  window.addEventListener('pagehide', function(){ if (isVisible) send({ type:'bye', id: me.id }); });
-
-  setInterval(function(){
-    var now = Date.now();
-    var changed = false;
-    Object.keys(peers).forEach(function(id){
-      if (now - peers[id].lastSeen > PEER_TIMEOUT_MS) { delete peers[id]; changed = true; }
-    });
-    if (changed && current === 'list') renderList();
-  }, PRESENCE_INTERVAL_MS);
+  setInterval(function(){ if (isVisible) { writePresence(); refreshPeersFromRaw(); } }, PRESENCE_INTERVAL_MS);
+  window.addEventListener('pagehide', function(){
+    if (isVisible && presenceCol) presenceCol.doc(me.id).delete().catch(function(){});
+  });
 
   setInterval(function(){
     var now = Date.now();
@@ -132,6 +132,43 @@
     expired.forEach(function(r){ respondToIncoming(r, 'decline'); });
     updateIncomingUI();
   }, 500);
+
+  function clearPendingTimeout(){
+    if (pendingTimeoutHandle) { clearTimeout(pendingTimeoutHandle); pendingTimeoutHandle = null; }
+  }
+
+  // ---- 내가 보낸 요청(outgoing)의 응답 지켜보기 ----
+  var unsubOutgoing = null;
+  function watchOutgoing(requestId){
+    unwatchOutgoing();
+    unsubOutgoing = requestsCol.doc(requestId).onSnapshot(function(docSnap){
+      if (!docSnap.exists || !pendingRequest || pendingRequest.requestId !== requestId) return;
+      var data = docSnap.data();
+      if (data.status === 'accepted') {
+        clearPendingTimeout();
+        unwatchOutgoing();
+        selectedRider = { name: pendingRequest.toName, save: pendingRequest.save };
+        pendingRequest = null;
+        renderFareNote();
+        goTo('matched');
+      } else if (data.status === 'declined') {
+        clearPendingTimeout();
+        unwatchOutgoing();
+        pendingRequest = null;
+        showListNotice('상대가 동승 요청을 거절했어요.');
+        goTo('list');
+      }
+    }, console.error);
+  }
+  function unwatchOutgoing(){ if (unsubOutgoing) { unsubOutgoing(); unsubOutgoing = null; } }
+
+  function cancelPendingRequest(){
+    if (!pendingRequest) return;
+    if (requestsCol) requestsCol.doc(pendingRequest.requestId).update({ status: 'cancelled' }).catch(console.error);
+    unwatchOutgoing();
+    clearPendingTimeout();
+    pendingRequest = null;
+  }
 
   function personIcon(){
     return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>';
@@ -182,13 +219,13 @@
   function buildEmptyState(){
     var div = document.createElement('div');
     div.className = 'empty-state';
-    div.innerHTML = '아직 주변에 열려 있는 다른 창이 없어요.<br>같은 브라우저에서 이 페이지를 새 탭으로 열어보세요.';
+    div.innerHTML = '아직 주변에 검색 중인 다른 사람이 없어요.<br>다른 기기에서도 이 페이지를 열어 "동승 가능한 사람 찾기"를 눌러보세요.';
     return div;
   }
 
   function respondToIncoming(r, decision){
+    if (requestsCol) requestsCol.doc(r.requestId).update({ status: decision === 'accept' ? 'accepted' : 'declined' }).catch(console.error);
     incoming = incoming.filter(function(x){ return x.requestId !== r.requestId; });
-    send({ type: decision, requestId: r.requestId, toId: r.fromId });
     if (decision === 'accept') {
       selectedRider = { name: r.fromName, save: r.save };
       renderFareNote();
@@ -226,9 +263,14 @@
   }
 
   function sendRequestTo(peer){
+    if (!requestsCol) return;
     var requestId = me.id + '-' + Date.now();
     pendingRequest = { requestId: requestId, toId: peer.id, toName: peer.name, detour: peer.detour, save: peer.save };
-    send({ type:'request', requestId: requestId, fromId: me.id, fromName: me.name, toId: peer.id, detour: peer.detour, save: peer.save });
+    requestsCol.doc(requestId).set({
+      fromId: me.id, fromName: me.name, toId: peer.id, toName: peer.name,
+      detour: peer.detour, save: peer.save, status: 'pending', createdAt: Date.now()
+    }).catch(console.error);
+    watchOutgoing(requestId);
     clearPendingTimeout();
     pendingTimeoutHandle = setTimeout(function(){
       if (pendingRequest && pendingRequest.requestId === requestId) {
@@ -317,10 +359,7 @@
   });
   document.getElementById('btn-restart').addEventListener('click', function(){ goTo('location'); });
 
-  document.getElementById('device-badge').textContent = '이 창은 "' + me.name + '"로 표시돼요';
-  if (!channel || location.protocol === 'file:') {
-    document.getElementById('protocol-warning').hidden = false;
-  }
+  document.getElementById('device-badge').textContent = '이 기기는 "' + me.name + '"로 표시돼요';
 
   goTo('location');
 })();
