@@ -71,7 +71,7 @@ function toRouteResult(body, points) {
 
 async function getNaverCarRoute(points) {
   if (points.length < 2) throw new Error('경로에는 두 개 이상의 좌표가 필요합니다.');
-  const url = new URL('https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving');
+  const url = new URL('https://maps.apigw.ntruss.com/map-direction/v1/driving');
   url.searchParams.set('start', `${points[0].lng},${points[0].lat}`);
   url.searchParams.set('goal', `${points[points.length - 1].lng},${points[points.length - 1].lat}`);
   if (points.length > 2) {
