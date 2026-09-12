@@ -104,9 +104,20 @@
         end: { lat: 37.5172, lng: 127.0473, name: 'B 도착지' }
       }
     };
-    compareSharedRideMock(input).then(function(result){
+    fetch('/api/route-compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input)
+    }).then(function(response){
+      return response.json().then(function(result){
+        if (!response.ok) throw new Error(result.error || '경로 비교에 실패했습니다.');
+        return result;
+      });
+    }).then(function(result){
       renderCandidates(result);
       goTo('list');
+    }).catch(function(error){
+      window.alert(error.message);
     });
   });
   document.getElementById('btn-decline').addEventListener('click', closeConfirm);
