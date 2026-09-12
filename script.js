@@ -13,13 +13,17 @@
   function chevronIcon(){
     return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
   }
+  function formatMinutes(seconds){
+    return Math.max(1, Math.round(seconds / 60)) + '분';
+  }
   function riderCardHTML(r){
     var totalSave = r.ownerSaved + r.requesterSaved;
     var recommended = r.recommended ? '<span class="sort-pill">추천</span>' : '';
     return '<div class="avatar">' + personIcon() + '</div>' +
       '<div class="rider-stats">' +
-        '<div class="stat-line"><span class="stat-label">A 추가 시간</span><span class="stat-value">+' + Math.max(0, Math.round(r.ownerExtraSeconds / 60)) + '분</span></div>' +
-        '<div class="stat-line"><span class="stat-label">B 추가 시간</span><span class="stat-value">+' + Math.max(0, Math.round(r.requesterExtraSeconds / 60)) + '분</span></div>' +
+        '<div class="stat-line"><span class="stat-label">A 이동 시간</span><span class="stat-value">' + formatMinutes(r.ownerSharedRoute.durationSeconds) + ' (단독 ' + formatMinutes(r.ownerSharedRoute.durationSeconds - r.ownerExtraSeconds) + ')</span></div>' +
+        '<div class="stat-line"><span class="stat-label">B 이동 시간</span><span class="stat-value">' + formatMinutes(r.requesterSharedRoute.durationSeconds) + ' (단독 ' + formatMinutes(r.requesterSharedRoute.durationSeconds - r.requesterExtraSeconds) + ')</span></div>' +
+        '<div class="stat-line"><span class="stat-label">전체 이동 시간</span><span class="stat-value">' + formatMinutes(r.route.durationSeconds) + '</span></div>' +
         '<div class="stat-line"><span class="stat-label">총 절약 금액</span><span class="stat-value save">-' + totalSave.toLocaleString('ko-KR') + '원</span></div>' +
         '<div class="stat-line"><span class="stat-label">경로</span><span class="stat-value route-label">' + r.label + '</span></div>' + recommended +
       '</div>';
