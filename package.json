@@ -1,0 +1,7 @@
+{
+  "name": "newbiton-taxi-carpool",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}
