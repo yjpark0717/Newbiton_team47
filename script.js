@@ -1,10 +1,5 @@
 (function(){
-  // TODO: 지도/거리 계산 담당이 실제 후보 데이터로 교체
-  var riders = [
-    { detour: 4, save: 3200 },
-    { detour: 9, save: 5400 },
-    { detour: 2, save: 1500 }
-  ];
+  var riders = [];
 
   var screens = ['location','list','waiting','matched'];
   var railLabels = { location:'1. 위치 설정', list:'2. 동승자 선택', waiting:'3. 요청 대기', matched:'4. 매칭 완료' };
@@ -19,22 +14,32 @@
     return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
   }
   function riderCardHTML(r){
+    var totalSave = r.ownerSaved + r.requesterSaved;
+    var recommended = r.recommended ? '<span class="sort-pill">추천</span>' : '';
     return '<div class="avatar">' + personIcon() + '</div>' +
       '<div class="rider-stats">' +
-        '<div class="stat-line"><span class="stat-label">우회 시간</span><span class="stat-value">+' + r.detour + '분</span></div>' +
-        '<div class="stat-line"><span class="stat-label">절약 금액</span><span class="stat-value save">-' + r.save.toLocaleString('ko-KR') + '원</span></div>' +
+        '<div class="stat-line"><span class="stat-label">A 추가 시간</span><span class="stat-value">+' + Math.max(0, Math.round(r.ownerExtraSeconds / 60)) + '분</span></div>' +
+        '<div class="stat-line"><span class="stat-label">B 추가 시간</span><span class="stat-value">+' + Math.max(0, Math.round(r.requesterExtraSeconds / 60)) + '분</span></div>' +
+        '<div class="stat-line"><span class="stat-label">총 절약 금액</span><span class="stat-value save">-' + totalSave.toLocaleString('ko-KR') + '원</span></div>' +
+        '<div class="stat-line"><span class="stat-label">경로</span><span class="stat-value route-label">' + r.label + '</span></div>' + recommended +
       '</div>';
   }
 
   var cardList = document.getElementById('card-list');
-  riders.forEach(function(r){
+  function renderCandidates(result){
+    riders = result.candidates.slice().sort(function(a, b){
+      return (b.ownerSaved + b.requesterSaved) - (a.ownerSaved + a.requesterSaved);
+    });
+    cardList.innerHTML = '';
+    riders.forEach(function(r){
     var btn = document.createElement('button');
     btn.className = 'rider-card';
     btn.type = 'button';
     btn.innerHTML = riderCardHTML(r) + '<span class="chevron">' + chevronIcon() + '</span>';
     btn.addEventListener('click', function(){ openConfirm(r); });
     cardList.appendChild(btn);
-  });
+    });
+  }
 
   var rail = document.getElementById('rail');
   screens.forEach(function(s){
@@ -81,13 +86,29 @@
     var note = document.getElementById('fare-note');
     if (!selectedRider) { note.innerHTML = ''; return; }
     note.innerHTML =
-      '<span>이번 동승으로 절약된 금액</span><b>' + selectedRider.save.toLocaleString('ko-KR') + '원</b>';
+      '<span>A 절약 금액</span><b>' + Math.round(selectedRider.ownerSaved).toLocaleString('ko-KR') + '원</b>' +
+      '<span>B 절약 금액</span><b>' + Math.round(selectedRider.requesterSaved).toLocaleString('ko-KR') + '원</b>';
   }
 
   document.getElementById('btn-locate').addEventListener('click', function(){
     document.getElementById('input-origin').value = '현재 위치 (내 GPS 좌표)';
   });
-  document.getElementById('btn-find').addEventListener('click', function(){ goTo('list'); });
+  document.getElementById('btn-find').addEventListener('click', function(){
+    var input = {
+      ownerRide: {
+        start: { lat: 37.4979, lng: 127.0276, name: document.getElementById('input-origin').value },
+        end: { lat: 37.5048, lng: 127.0254, name: document.getElementById('input-dest').value }
+      },
+      requesterRide: {
+        start: { lat: 37.5065, lng: 127.0537, name: 'B 출발지' },
+        end: { lat: 37.5172, lng: 127.0473, name: 'B 도착지' }
+      }
+    };
+    compareSharedRideMock(input).then(function(result){
+      renderCandidates(result);
+      goTo('list');
+    });
+  });
   document.getElementById('btn-decline').addEventListener('click', closeConfirm);
   document.getElementById('btn-accept').addEventListener('click', function(){
     closeConfirm();
