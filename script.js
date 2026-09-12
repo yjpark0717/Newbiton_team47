@@ -1,15 +1,17 @@
 (function(){
   // TODO: 지도/거리 계산 담당이 실제 후보 데이터로 교체
   var riders = [
-    { detour: 4, save: 3200 },
-    { detour: 9, save: 5400 },
-    { detour: 2, save: 1500 }
+    { id: 'A', name: '이용자 A', detour: 4, save: 3200 },
+    { id: 'B', name: '이용자 B', detour: 9, save: 5400 },
+    { id: 'C', name: '이용자 C', detour: 2, save: 1500, incoming: true }
   ];
+  var INCOMING_SECONDS = 20;
 
   var screens = ['location','list','waiting','matched'];
   var railLabels = { location:'1. 위치 설정', list:'2. 동승자 선택', waiting:'3. 요청 대기', matched:'4. 매칭 완료' };
   var current = 'location';
   var waitingTimer = null;
+  var incomingTimer = null;
   var selectedRider = null;
 
   function personIcon(){
@@ -18,23 +20,98 @@
   function chevronIcon(){
     return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
   }
-  function riderCardHTML(r){
+  function riderInfoHTML(r){
     return '<div class="avatar">' + personIcon() + '</div>' +
       '<div class="rider-stats">' +
+        '<div class="rider-name">' + r.name + '</div>' +
         '<div class="stat-line"><span class="stat-label">우회 시간</span><span class="stat-value">+' + r.detour + '분</span></div>' +
         '<div class="stat-line"><span class="stat-label">절약 금액</span><span class="stat-value save">-' + r.save.toLocaleString('ko-KR') + '원</span></div>' +
       '</div>';
   }
 
   var cardList = document.getElementById('card-list');
-  riders.forEach(function(r){
+
+  function buildRiderCard(r){
     var btn = document.createElement('button');
     btn.className = 'rider-card';
     btn.type = 'button';
-    btn.innerHTML = riderCardHTML(r) + '<span class="chevron">' + chevronIcon() + '</span>';
+    btn.innerHTML = riderInfoHTML(r) + '<span class="chevron">' + chevronIcon() + '</span>';
     btn.addEventListener('click', function(){ openConfirm(r); });
-    cardList.appendChild(btn);
-  });
+    return btn;
+  }
+
+  function buildIncomingCard(r){
+    var wrap = document.createElement('div');
+    wrap.className = 'incoming-card';
+    wrap.innerHTML =
+      '<div class="incoming-head">' +
+        '<span class="badge-incoming">동승 요청 도착</span>' +
+      '</div>' +
+      '<div class="rider-card-inner">' + riderInfoHTML(r) + '</div>' +
+      '<p class="incoming-note"><span class="countdown-num">' + INCOMING_SECONDS + '</span>초 이내에 동승 수락 여부를 선택해주세요</p>' +
+      '<div class="incoming-bar"><div class="incoming-bar-fill"></div></div>' +
+      '<div class="incoming-actions">' +
+        '<button class="btn btn-outline btn-sm" data-action="decline" type="button">거절</button>' +
+        '<button class="btn btn-primary btn-sm" data-action="accept" type="button">수락</button>' +
+      '</div>';
+    wrap.querySelector('[data-action="decline"]').addEventListener('click', function(){
+      handleIncomingDecision(r, 'decline');
+    });
+    wrap.querySelector('[data-action="accept"]').addEventListener('click', function(){
+      handleIncomingDecision(r, 'accept');
+    });
+    return wrap;
+  }
+
+  function renderList(){
+    if (incomingTimer) { clearInterval(incomingTimer); incomingTimer = null; }
+    cardList.innerHTML = '';
+    var incomingRider = null;
+    riders.forEach(function(r){
+      if (r.incoming) {
+        incomingRider = r;
+        cardList.appendChild(buildIncomingCard(r));
+      }
+    });
+    riders.forEach(function(r){
+      if (!r.incoming) cardList.appendChild(buildRiderCard(r));
+    });
+    if (incomingRider) startIncomingCountdown(incomingRider);
+  }
+
+  function startIncomingCountdown(r){
+    var remaining = INCOMING_SECONDS;
+    var fill = cardList.querySelector('.incoming-bar-fill');
+    if (fill) {
+      requestAnimationFrame(function(){
+        fill.style.transitionDuration = INCOMING_SECONDS + 's';
+        fill.style.width = '0%';
+      });
+    }
+    incomingTimer = setInterval(function(){
+      remaining--;
+      var numEl = cardList.querySelector('.countdown-num');
+      if (numEl) numEl.textContent = Math.max(remaining, 0);
+      if (remaining <= 0) {
+        clearInterval(incomingTimer);
+        incomingTimer = null;
+        handleIncomingDecision(r, 'decline');
+      }
+    }, 1000);
+  }
+
+  function handleIncomingDecision(r, decision){
+    if (incomingTimer) { clearInterval(incomingTimer); incomingTimer = null; }
+    var idx = riders.indexOf(r);
+    if (idx > -1) riders.splice(idx, 1);
+    if (decision === 'accept') {
+      selectedRider = r;
+      renderFareNote();
+      goTo('matched');
+    } else {
+      renderList();
+    }
+  }
 
   var rail = document.getElementById('rail');
   screens.forEach(function(s){
@@ -54,6 +131,9 @@
     Array.prototype.forEach.call(rail.children, function(b){
       b.classList.toggle('is-current', b.dataset.screen === name);
     });
+    if (name === 'list') {
+      renderList();
+    }
     if (name === 'waiting') {
       waitingTimer = setTimeout(function(){
         renderFareNote();
@@ -68,7 +148,7 @@
 
   function openConfirm(r){
     selectedRider = r;
-    confirmPreview.innerHTML = riderCardHTML(r);
+    confirmPreview.innerHTML = riderInfoHTML(r);
     dim.classList.add('is-active');
     confirmCard.classList.add('is-active');
   }
